@@ -1,0 +1,5 @@
+{
+  "name": "Package-Lock Vulnerability Scanner",
+  "description": "An application to scan a package-lock.json file for a list of known affected packages. Upload your file to check for dependencies that might be vulnerable or deprecated.",
+  "requestFramePermissions": []
+}
