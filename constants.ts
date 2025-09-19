@@ -93,6 +93,7 @@ export const AFFECTED_PACKAGES = new Set([
   '@operato/shell',
   '@operato/styles',
   '@operato/utils',
+  '@rxap/ngx-bootstrap',
   '@teselagen/bio-parsers',
   '@teselagen/bounce-loader',
   '@teselagen/file-utils',
