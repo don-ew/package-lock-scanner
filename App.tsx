@@ -3,31 +3,53 @@ import FileUpload from './components/FileUpload';
 import ResultsDisplay from './components/ResultsDisplay';
 import { Header } from './components/Header';
 import { AFFECTED_PACKAGES } from './constants';
-import type { AnalysisResult, PackageLock, AffectedPackage } from './types';
+import type { AnalysisResult, PackageLock, AffectedPackage, V1Dependencies } from './types';
 import { ChevronDownIcon, ChevronUpIcon } from './components/icons/Icons';
 
 const parsePackageLock = (content: string): { packages: Map<string, string>, error?: string } => {
     try {
         const json: PackageLock = JSON.parse(content);
-        
-        if (!json.packages) {
-            return { packages: new Map(), error: "Invalid package-lock.json format: 'packages' property is missing." };
-        }
-
         const packages = new Map<string, string>();
 
-        Object.keys(json.packages).forEach(path => {
-          if (path === "") return;
+        // Handle lockfileVersion 2/3 (npm v7+)
+        if (json.packages) {
+            Object.keys(json.packages).forEach(path => {
+              if (path === "") return;
 
-          const lastNodeModulesIndex = path.lastIndexOf('node_modules/');
-          if(lastNodeModulesIndex === -1) return;
+              const lastNodeModulesIndex = path.lastIndexOf('node_modules/');
+              if (lastNodeModulesIndex === -1) return;
 
-          const packageName = path.substring(lastNodeModulesIndex + 'node_modules/'.length);
-          
-          if (!packages.has(packageName)) {
-            packages.set(packageName, json.packages[path].version);
-          }
-        });
+              const packageName = path.substring(lastNodeModulesIndex + 'node_modules/'.length);
+              
+              if (packageName && !packages.has(packageName)) {
+                packages.set(packageName, json.packages![path].version);
+              }
+            });
+        } 
+        // Handle lockfileVersion 1 (npm v5/v6)
+        else if (json.dependencies) {
+            const traverseDependencies = (deps: V1Dependencies, pkgs: Map<string, string>) => {
+                Object.keys(deps).forEach(pkgName => {
+                    const pkgInfo = deps[pkgName];
+                    if (pkgInfo) {
+                        if (!pkgs.has(pkgName)) {
+                            pkgs.set(pkgName, pkgInfo.version);
+                        }
+                        if (pkgInfo.dependencies) {
+                            traverseDependencies(pkgInfo.dependencies, pkgs);
+                        }
+                    }
+                });
+            };
+            traverseDependencies(json.dependencies, packages);
+        } else {
+            return { packages: new Map(), error: "Invalid package-lock.json format: 'packages' or 'dependencies' property is missing." };
+        }
+
+        if (packages.size === 0) {
+            return { packages, error: "Could not find any packages in the provided lockfile." };
+        }
+        
         return { packages };
     } catch (e) {
         if (e instanceof SyntaxError) {
@@ -36,6 +58,7 @@ const parsePackageLock = (content: string): { packages: Map<string, string>, err
         return { packages: new Map(), error: "An unexpected error occurred while parsing package-lock.json."};
     }
 };
+
 
 const parseYarnLock = (content: string): { packages: Map<string, string>, error?: string } => {
     const packages = new Map<string, string>();
