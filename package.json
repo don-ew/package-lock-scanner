@@ -1,5 +1,5 @@
 {
-  "name": "package-lock-vulnerability-scanner",
+  "name": "dependency-lockfile-scanner",
   "private": true,
   "version": "0.0.0",
   "type": "module",

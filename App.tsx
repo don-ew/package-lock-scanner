@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback } from 'react';
 import FileUpload from './components/FileUpload';
 import ResultsDisplay from './components/ResultsDisplay';
@@ -6,6 +5,81 @@ import { Header } from './components/Header';
 import { AFFECTED_PACKAGES } from './constants';
 import type { AnalysisResult, PackageLock, AffectedPackage } from './types';
 import { ChevronDownIcon, ChevronUpIcon } from './components/icons/Icons';
+
+const parsePackageLock = (content: string): { packages: Map<string, string>, error?: string } => {
+    try {
+        const json: PackageLock = JSON.parse(content);
+        
+        if (!json.packages) {
+            return { packages: new Map(), error: "Invalid package-lock.json format: 'packages' property is missing." };
+        }
+
+        const packages = new Map<string, string>();
+
+        Object.keys(json.packages).forEach(path => {
+          if (path === "") return;
+
+          const lastNodeModulesIndex = path.lastIndexOf('node_modules/');
+          if(lastNodeModulesIndex === -1) return;
+
+          const packageName = path.substring(lastNodeModulesIndex + 'node_modules/'.length);
+          
+          if (!packages.has(packageName)) {
+            packages.set(packageName, json.packages[path].version);
+          }
+        });
+        return { packages };
+    } catch (e) {
+        if (e instanceof SyntaxError) {
+          return { packages: new Map(), error: "Failed to parse file. Please ensure it's a valid JSON file."};
+        }
+        return { packages: new Map(), error: "An unexpected error occurred while parsing package-lock.json."};
+    }
+};
+
+const parseYarnLock = (content: string): { packages: Map<string, string>, error?: string } => {
+    const packages = new Map<string, string>();
+    const lines = content.split('\n');
+    
+    let currentPackageNames: string[] = [];
+
+    for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (line.startsWith('__metadata:')) {
+            currentPackageNames = []; // reset in case we are in a metadata block
+            continue;
+        }
+
+        if (line.length > 0 && !line.startsWith(' ') && !line.startsWith('#')) {
+            // New package definition line
+            if (line.trim().endsWith(':')) {
+                currentPackageNames = line.slice(0, line.lastIndexOf(':')).split(',').map(s => {
+                    const cleanSpecifier = s.trim().replace(/^"|"$/g, '');
+                    const lastAt = cleanSpecifier.lastIndexOf('@');
+                    if (lastAt > 0) {
+                        return cleanSpecifier.substring(0, lastAt);
+                    }
+                    return cleanSpecifier;
+                }).filter(Boolean);
+            }
+        } else if (trimmedLine.startsWith('version') && currentPackageNames.length > 0) {
+            const version = trimmedLine.substring(trimmedLine.indexOf(' ') + 1).replace(/"/g, '').trim();
+            for (const packageName of currentPackageNames) {
+                if (packageName && !packages.has(packageName)) {
+                    packages.set(packageName, version);
+                }
+            }
+            currentPackageNames = [];
+        }
+    }
+    
+    if (packages.size === 0) {
+        return { packages, error: "Could not find any packages. Is this a valid yarn.lock file?" };
+    }
+
+    return { packages };
+};
+
 
 const App: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -16,7 +90,7 @@ const App: React.FC = () => {
   const [isEditorVisible, setIsEditorVisible] = useState<boolean>(false);
 
 
-  const analyzePackageLock = useCallback((selectedFile: File) => {
+  const analyzeFile = useCallback((selectedFile: File) => {
     setIsLoading(true);
     setResult(null);
     setError(null);
@@ -28,46 +102,42 @@ const App: React.FC = () => {
             throw new Error("File could not be read.");
         }
         const content = event.target.result as string;
-        const json: PackageLock = JSON.parse(content);
         
-        if (!json.packages) {
-            throw new Error("Invalid package-lock.json format: 'packages' property is missing.");
+        let analysisResult: { packages: Map<string, string>, error?: string };
+
+        if (selectedFile.name === 'package-lock.json') {
+          analysisResult = parsePackageLock(content);
+        } else if (selectedFile.name === 'yarn.lock') {
+          analysisResult = parseYarnLock(content);
+        } else {
+          throw new Error("Unsupported file. Please upload 'package-lock.json' or 'yarn.lock'.");
+        }
+
+        const { packages: parsedPackages, error: parseError } = analysisResult;
+        
+        if (parseError) {
+            throw new Error(parseError);
         }
 
         const userAffectedPackages = new Set(affectedPackages.split('\n').map(p => p.trim()).filter(Boolean));
         const foundPackages: AffectedPackage[] = [];
-        const scannedPackages = new Set<string>();
 
-        Object.keys(json.packages).forEach(path => {
-          // Skip the root project entry which is an empty string
-          if (path === "") return;
-
-          // Extract package name from path like "node_modules/@types/node"
-          const lastNodeModulesIndex = path.lastIndexOf('node_modules/');
-          if(lastNodeModulesIndex === -1) return;
-
-          const packageName = path.substring(lastNodeModulesIndex + 'node_modules/'.length);
-          
-          if (!scannedPackages.has(packageName)) {
-            scannedPackages.add(packageName);
-            if (userAffectedPackages.has(packageName)) {
-              foundPackages.push({
-                name: packageName,
-                version: json.packages[path].version,
-              });
-            }
+        for (const [packageName, version] of parsedPackages.entries()) {
+          if (userAffectedPackages.has(packageName)) {
+            foundPackages.push({
+              name: packageName,
+              version: version,
+            });
           }
-        });
+        }
         
         setResult({
           found: foundPackages,
-          scannedCount: scannedPackages.size,
+          scannedCount: parsedPackages.size,
         });
 
       } catch (e) {
-        if (e instanceof SyntaxError) {
-          setError("Failed to parse file. Please ensure it's a valid JSON file.");
-        } else if (e instanceof Error) {
+        if (e instanceof Error) {
           setError(e.message);
         } else {
           setError("An unknown error occurred during analysis.");
@@ -90,7 +160,7 @@ const App: React.FC = () => {
     setResult(null);
     setError(null);
     if (selectedFile) {
-        analyzePackageLock(selectedFile);
+        analyzeFile(selectedFile);
     }
   };
   
